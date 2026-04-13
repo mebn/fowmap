@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -11,6 +12,15 @@ import {
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type NativeMapView from 'react-native-maps';
 import type { MapStyleElement, Region } from 'react-native-maps';
+import {
+  getDistanceMeters,
+  isCoordinate,
+  metersToLatitudeDelta,
+  metersToLongitudeDelta,
+  STORAGE_KEY,
+  UNLOCK_RADIUS_METERS,
+} from '../lib/exploration';
+import type { Coordinate } from '../lib/exploration';
 
 const mapModule =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -18,9 +28,6 @@ const mapModule =
 const MapView = mapModule?.default;
 const Polygon = mapModule?.Polygon;
 
-const STORAGE_KEY = 'fog-of-war/revealed-locations-v1';
-const METERS_PER_DEGREE_LATITUDE = 111_320;
-const UNLOCK_RADIUS_METERS = 65;
 const VIEWPORT_HEIGHT_METERS = 520;
 const VIEWPORT_WIDTH_METERS = 300;
 const LOCATION_DISTANCE_INTERVAL_METERS = 8;
@@ -45,11 +52,6 @@ const HIDDEN_MAP_LABEL_STYLE: MapStyleElement[] = [
   },
 ];
 
-type Coordinate = {
-  latitude: number;
-  longitude: number;
-};
-
 type CoordinateBounds = {
   minimumLatitude: number;
   maximumLatitude: number;
@@ -62,23 +64,6 @@ type FogMask = {
   holes: Coordinate[][];
 };
 
-function metersToLatitudeDelta(meters: number) {
-  return meters / METERS_PER_DEGREE_LATITUDE;
-}
-
-function metersToLongitudeDelta(meters: number, latitude: number) {
-  const safeCosine = Math.max(Math.cos((latitude * Math.PI) / 180), 0.01);
-  return meters / (METERS_PER_DEGREE_LATITUDE * safeCosine);
-}
-
-function latitudeDeltaToMeters(latitudeDelta: number) {
-  return latitudeDelta * METERS_PER_DEGREE_LATITUDE;
-}
-
-function longitudeDeltaToMeters(longitudeDelta: number, latitude: number) {
-  return longitudeDelta * METERS_PER_DEGREE_LATITUDE * Math.cos((latitude * Math.PI) / 180);
-}
-
 function getViewportRegion(center: Coordinate): Region {
   return {
     latitude: center.latitude,
@@ -86,34 +71,6 @@ function getViewportRegion(center: Coordinate): Region {
     latitudeDelta: metersToLatitudeDelta(VIEWPORT_HEIGHT_METERS),
     longitudeDelta: metersToLongitudeDelta(VIEWPORT_WIDTH_METERS, center.latitude),
   };
-}
-
-function getDistanceMeters(first: Coordinate, second: Coordinate) {
-  const latitude = (first.latitude + second.latitude) / 2;
-
-  return Math.hypot(
-    longitudeDeltaToMeters(second.longitude - first.longitude, latitude),
-    latitudeDeltaToMeters(second.latitude - first.latitude)
-  );
-}
-
-function isCoordinate(value: unknown): value is Coordinate {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<Coordinate>;
-
-  return (
-    typeof candidate.latitude === 'number' &&
-    typeof candidate.longitude === 'number' &&
-    Number.isFinite(candidate.latitude) &&
-    Number.isFinite(candidate.longitude) &&
-    candidate.latitude >= -90 &&
-    candidate.latitude <= 90 &&
-    candidate.longitude >= -180 &&
-    candidate.longitude <= 180
-  );
 }
 
 function mergeRevealedLocations(existingLocations: Coordinate[], nextLocation: Coordinate) {
@@ -194,6 +151,7 @@ function getFogMask(region: Region, revealedLocations: Coordinate[]): FogMask {
 }
 
 export default function MapScreen() {
+  const router = useRouter();
   const mapRef = useRef<NativeMapView | null>(null);
   const [locationState, setLocationState] = useState<'loading' | 'denied' | 'ready'>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -342,6 +300,10 @@ export default function MapScreen() {
     mapRef.current?.animateToRegion(nextRegion, 250);
   };
 
+  const openStats = () => {
+    router.push('/stats');
+  };
+
   if (Platform.OS === 'web' || !MapView || !Polygon) {
     return (
       <View style={styles.centeredScreen}>
@@ -411,11 +373,21 @@ export default function MapScreen() {
       </MapView>
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel="Open explored area stats"
+        onPress={openStats}
+        style={({ pressed }) => [
+          styles.statsButton,
+          pressed ? styles.controlButtonPressed : null,
+        ]}>
+        <Text style={styles.statsButtonText}>Stats</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
         accessibilityLabel="Center map on current location"
         onPress={recenterMap}
         style={({ pressed }) => [
           styles.centerButton,
-          pressed ? styles.centerButtonPressed : null,
+          pressed ? styles.controlButtonPressed : null,
         ]}>
         <Text style={styles.centerButtonText}>Center</Text>
       </Pressable>
@@ -461,11 +433,11 @@ const styles = StyleSheet.create({
   },
   errorBadge: {
     position: 'absolute',
-    top: 56,
+    top: 112,
     left: 16,
     right: 16,
     backgroundColor: 'rgba(24, 24, 24, 0.86)',
-    borderRadius: 16,
+    borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
@@ -487,10 +459,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
-  centerButtonPressed: {
+  statsButton: {
+    position: 'absolute',
+    top: 56,
+    left: 16,
+    minHeight: 44,
+    minWidth: 76,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  controlButtonPressed: {
     opacity: 0.78,
   },
   centerButtonText: {
+    color: '#050505',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  statsButtonText: {
     color: '#050505',
     fontSize: 15,
     fontWeight: '700',
